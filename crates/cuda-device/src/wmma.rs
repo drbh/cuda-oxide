@@ -443,3 +443,25 @@ pub unsafe fn mma_m16n8k32_s32_s8(c: [i32; 4], a: [u32; 4], b: [u32; 2]) -> [i32
     let _ = (c, a, b);
     unreachable!("mma_m16n8k32_s32_s8 called outside CUDA kernel context")
 }
+
+/// `mma.sync.aligned.m16n8k32.row.col.f32.e4m3.e4m3.f32`
+///
+/// FP8 (e4m3) tensor-core MMA with f32 accumulation: D = A×B + C over a
+/// 16×8×32 tile. Fragment layout matches the s8 k32 variant: A is `[u32; 4]`
+/// (16 packed e4m3 per lane), B is `[u32; 2]` (8 packed e4m3 per lane), C/D
+/// are `[f32; 4]`. This is the building block for DeepGEMM-style
+/// block-scaled FP8 GEMMs, where partial sums are promoted out of the
+/// accumulator and scaled on the CUDA cores every K block.
+///
+/// # Safety
+///
+/// - All 32 lanes must execute the same call together.
+/// - `c`, `a`, and `b` must contain the calling lane's fragments in the
+///   layout above.
+/// - Requires `sm_89+` and PTX ISA 8.4+.
+#[inline(never)]
+#[must_use]
+pub unsafe fn mma_m16n8k32_f32_e4m3(c: [f32; 4], a: [u32; 4], b: [u32; 2]) -> [f32; 4] {
+    let _ = (c, a, b);
+    unreachable!("mma_m16n8k32_f32_e4m3 called outside CUDA kernel context")
+}

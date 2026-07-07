@@ -473,6 +473,37 @@ impl Tcgen05Ld16x256bPureOp {
     }
 }
 
+/// Pure TMEM store: writes 4 f32 values from registers to tensor memory.
+///
+/// Register-to-TMEM counterpart of `Tcgen05Ld16x256bPureOp`; needed by
+/// attention kernels to rescale accumulators held in TMEM (online-softmax
+/// correction).
+///
+/// PTX: `tcgen05.st.sync.aligned.16x256b.x1.b32 [tmem_addr], {r0, r1, r2, r3};`
+///
+/// # Operands
+///
+/// - `tmem_addr` (i32): TMEM address
+/// - 4 × f32 values (r0, r1, r2, r3)
+///
+/// # Results
+///
+/// - None
+#[pliron_op(
+    name = "nvvm.tcgen05_st_16x256b_pure",
+    format,
+    verifier = "succ",
+    interfaces = [NOpdsInterface<5>, NResultsInterface<0>],
+)]
+pub struct Tcgen05St16x256bPureOp;
+
+impl Tcgen05St16x256bPureOp {
+    /// Wrap an existing operation pointer.
+    pub fn new(op: Ptr<Operation>) -> Self {
+        Tcgen05St16x256bPureOp { op }
+    }
+}
+
 // =============================================================================
 // Synchronization Operations
 // =============================================================================
@@ -523,6 +554,38 @@ impl Tcgen05LoadWaitOp {
     interfaces = [NOpdsInterface<0>, NResultsInterface<0>],
 )]
 pub struct Tcgen05StoreWaitOp;
+
+/// Commit prior cp.async ops into a group. PTX: `cp.async.commit_group;`
+#[pliron_op(
+    name = "nvvm.cp_async_commit_group",
+    format,
+    verifier = "succ",
+    interfaces = [NOpdsInterface<0>, NResultsInterface<0>],
+)]
+pub struct CpAsyncCommitGroupZeroOp;
+
+impl CpAsyncCommitGroupZeroOp {
+    /// Wrap an existing operation pointer.
+    pub fn new(op: Ptr<Operation>) -> Self {
+        CpAsyncCommitGroupZeroOp { op }
+    }
+}
+
+/// Wait for all outstanding cp.async ops. PTX: `cp.async.wait_all;`
+#[pliron_op(
+    name = "nvvm.cp_async_wait_all",
+    format,
+    verifier = "succ",
+    interfaces = [NOpdsInterface<0>, NResultsInterface<0>],
+)]
+pub struct CpAsyncWaitAllOp;
+
+impl CpAsyncWaitAllOp {
+    /// Wrap an existing operation pointer.
+    pub fn new(op: Ptr<Operation>) -> Self {
+        CpAsyncWaitAllOp { op }
+    }
+}
 
 impl Tcgen05StoreWaitOp {
     /// Wrap an existing operation pointer.
@@ -614,6 +677,27 @@ pub struct Tcgen05MmaF16Cg2Op;
 impl Tcgen05MmaF16Cg2Op {
     pub fn new(op: Ptr<Operation>) -> Self {
         Tcgen05MmaF16Cg2Op { op }
+    }
+}
+
+/// tcgen05 MMA with f16 inputs for a CTA pair (`cta_group::2`).
+///
+/// PTX: `tcgen05.mma.cta_group::2.kind::f8f6f4 [d], a_desc, b_desc, idesc, {0,0,0,0}, enable_d;`
+///
+/// # Operands
+///
+/// - `d_tmem` (i32), `a_desc` (i64), `b_desc` (i64), `idesc` (i32), `enable_d` (i1)
+#[pliron_op(
+    name = "nvvm.tcgen05_mma_f8_cg2",
+    format,
+    verifier = "succ",
+    interfaces = [NOpdsInterface<5>, NResultsInterface<0>],
+)]
+pub struct Tcgen05MmaF8Cg2Op;
+
+impl Tcgen05MmaF8Cg2Op {
+    pub fn new(op: Ptr<Operation>) -> Self {
+        Tcgen05MmaF8Cg2Op { op }
     }
 }
 
@@ -732,6 +816,9 @@ pub(super) fn register(ctx: &mut Context) {
     // Pure TMEM load (correct approach - returns registers)
     Tcgen05Ld16x256bX8PureOp::register(ctx);
     Tcgen05Ld16x256bPureOp::register(ctx);
+    Tcgen05St16x256bPureOp::register(ctx);
+    CpAsyncCommitGroupZeroOp::register(ctx);
+    CpAsyncWaitAllOp::register(ctx);
     // Synchronization
     Tcgen05LoadWaitOp::register(ctx);
     Tcgen05StoreWaitOp::register(ctx);
@@ -740,6 +827,7 @@ pub(super) fn register(ctx: &mut Context) {
     Tcgen05DeallocCg2Op::register(ctx);
     Tcgen05RelinquishAllocPermitCg2Op::register(ctx);
     Tcgen05MmaF16Cg2Op::register(ctx);
+    Tcgen05MmaF8Cg2Op::register(ctx);
     Tcgen05CommitCg2Op::register(ctx);
     Tcgen05CommitSharedClusterCg2Op::register(ctx);
     Tcgen05CommitMulticastCg2Op::register(ctx);

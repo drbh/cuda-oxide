@@ -3749,6 +3749,20 @@ fn try_dispatch_intrinsic(
                 loc,
             )?))
         }
+        "cuda_device::wmma::mma_m16n8k32_f32_e4m3" => {
+            Ok(Some(intrinsics::wmma::emit_mma_m16n8k32_f32_e4m3(
+                ctx,
+                body,
+                args,
+                destination,
+                target,
+                block_ptr,
+                prev_op,
+                value_map,
+                block_map,
+                loc,
+            )?))
+        }
         "cuda_device::wmma::mma_m8n8k4_f64" => Ok(Some(intrinsics::wmma::emit_mma_m8n8k4_f64(
             ctx,
             body,
@@ -3945,6 +3959,11 @@ fn try_dispatch_intrinsic(
                 loc,
             )?))
         }
+        "cuda_device::tcgen05::tcgen05_st_16x256b_pure" => {
+            Ok(Some(intrinsics::tcgen05::emit_tcgen05_st_16x256b_pure(
+                ctx, body, args, target, block_ptr, prev_op, value_map, block_map, loc,
+            )?))
+        }
         "cuda_device::tcgen05::tcgen05_load_wait" => {
             Ok(Some(intrinsics::tcgen05::emit_tcgen05_load_wait(
                 ctx, args, target, block_ptr, prev_op, block_map, loc,
@@ -3952,6 +3971,16 @@ fn try_dispatch_intrinsic(
         }
         "cuda_device::tcgen05::tcgen05_store_wait" => {
             Ok(Some(intrinsics::tcgen05::emit_tcgen05_store_wait(
+                ctx, args, target, block_ptr, prev_op, block_map, loc,
+            )?))
+        }
+        "cuda_device::async_copy::cp_async_commit_group" => {
+            Ok(Some(intrinsics::tcgen05::emit_cp_async_commit_group(
+                ctx, args, target, block_ptr, prev_op, block_map, loc,
+            )?))
+        }
+        "cuda_device::async_copy::cp_async_wait_all" => {
+            Ok(Some(intrinsics::tcgen05::emit_cp_async_wait_all(
                 ctx, args, target, block_ptr, prev_op, block_map, loc,
             )?))
         }
@@ -3974,6 +4003,11 @@ fn try_dispatch_intrinsic(
         )),
         "cuda_device::tcgen05::tcgen05_mma_f16_cg2" => {
             Ok(Some(intrinsics::tcgen05::emit_tcgen05_mma_f16_cg2(
+                ctx, body, args, target, block_ptr, prev_op, value_map, block_map, loc,
+            )?))
+        }
+        "cuda_device::tcgen05::tcgen05_mma_f8_cg2" => {
+            Ok(Some(intrinsics::tcgen05::emit_tcgen05_mma_f8_cg2(
                 ctx, body, args, target, block_ptr, prev_op, value_map, block_map, loc,
             )?))
         }

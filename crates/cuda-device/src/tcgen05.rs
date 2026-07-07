@@ -1738,6 +1738,33 @@ pub unsafe fn tcgen05_ld_16x256b_pure(tmem_addr: u32) -> TmemF32x4 {
     unreachable!("tcgen05_ld_16x256b_pure called outside CUDA kernel context")
 }
 
+/// Store 4 f32 values from registers into tensor memory (PURE - no SMEM).
+///
+/// Register-to-TMEM counterpart of [`tcgen05_ld_16x256b_pure`]: the warp
+/// collectively writes a 16-row × 256-bit TMEM region, 4 b32 values per
+/// lane, using the same lane↔element mapping as the load. Needed to rescale
+/// accumulators held in TMEM (e.g. the online-softmax correction in
+/// flash-attention kernels).
+///
+/// # PTX
+///
+/// ```ptx
+/// tcgen05.st.sync.aligned.16x256b.x1.b32
+///   [%tmem_addr], {%r0, %r1, %r2, %r3};
+/// ```
+///
+/// # Safety
+///
+/// - `tmem_addr` must be valid (from tcgen05_alloc)
+/// - Must be called by ALL 32 threads in a warp together (warp-synchronous)
+/// - Must call `tcgen05_store_wait()` before any operation that reads the
+///   stored region (including MMA and `tcgen05_ld_*`)
+#[inline(never)]
+pub unsafe fn tcgen05_st_16x256b_pure(tmem_addr: u32, v0: f32, v1: f32, v2: f32, v3: f32) {
+    let _ = (tmem_addr, v0, v1, v2, v3);
+    unreachable!("tcgen05_st_16x256b_pure called outside CUDA kernel context")
+}
+
 // =============================================================================
 // PTX Type Conversion Intrinsics
 // =============================================================================
@@ -2224,6 +2251,25 @@ pub unsafe fn tcgen05_mma_f16_cg2(
 ) {
     let _ = (d_tmem, a_desc, b_desc, idesc, enable_d);
     unreachable!("tcgen05_mma_f16_cg2 called outside CUDA kernel context")
+}
+
+/// FP8 (e4m3) pair-UMMA: `tcgen05.mma.cta_group::2.kind::f8f6f4`.
+///
+/// K = 32 elements per instruction (32 bytes — the same byte stride as the
+/// f16 variant's K=16, so gemm_sol-style descriptors and j*32 stepping work
+/// unchanged). Build the instruction descriptor with
+/// `Tcgen05ElementType::F16`: e4m3 encodes as atype/btype = 0 under
+/// kind::f8f6f4, the same bit pattern.
+#[inline(never)]
+pub unsafe fn tcgen05_mma_f8_cg2(
+    d_tmem: u32,
+    a_desc: u64,
+    b_desc: u64,
+    idesc: u32,
+    enable_d: bool,
+) {
+    let _ = (d_tmem, a_desc, b_desc, idesc, enable_d);
+    unreachable!("tcgen05_mma_f8_cg2 called outside CUDA kernel context")
 }
 
 /// Commit pending CTA-pair tcgen05 operations to an mbarrier (`cta_group::2`).

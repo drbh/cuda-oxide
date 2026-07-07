@@ -235,3 +235,25 @@ pub unsafe fn cp_async_ca_zfill_8(_shared_dst: *mut u32, _global_src: *const u8,
 pub unsafe fn cp_async_ca_zfill_16(_shared_dst: *mut u32, _global_src: *const u8, _src_size: u32) {
     unreachable!("cp_async_ca_zfill_16 called outside CUDA kernel context")
 }
+
+/// Commit all prior `cp.async` operations of this thread into one group.
+///
+/// # PTX
+///
+/// `cp.async.commit_group;`
+#[inline(never)]
+pub fn cp_async_commit_group() {
+    unreachable!("cp_async_commit_group called outside CUDA kernel context")
+}
+
+/// Wait for ALL outstanding `cp.async` operations of this thread to complete.
+/// Pair with a block barrier (`sync_threads`) before other threads read the
+/// copied shared memory.
+///
+/// # PTX
+///
+/// `cp.async.wait_all;`
+#[inline(never)]
+pub fn cp_async_wait_all() {
+    unreachable!("cp_async_wait_all called outside CUDA kernel context")
+}

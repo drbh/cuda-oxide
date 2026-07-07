@@ -13,15 +13,15 @@ use crate::translator::rvalue;
 use crate::translator::types;
 use crate::translator::values::ValueMap;
 use dialect_nvvm::ops::{
-    CvtF32x2Bf16x2Op, StmatrixM8n8X2Op, StmatrixM8n8X2TransOp, StmatrixM8n8X4Op,
-    StmatrixM8n8X4TransOp, Tcgen05AllocCg2Op, Tcgen05AllocOp, Tcgen05CommitCg2Op,
-    Tcgen05CommitMulticastCg2Op, Tcgen05CommitOp, Tcgen05CommitSharedClusterCg2Op,
-    Tcgen05CommitSharedClusterOp, Tcgen05CpSmemToTmemCg2Op, Tcgen05CpSmemToTmemOp,
-    Tcgen05DeallocCg2Op, Tcgen05DeallocOp, Tcgen05FenceAfterThreadSyncOp,
+    CpAsyncCommitGroupZeroOp, CpAsyncWaitAllOp, CvtF32x2Bf16x2Op, StmatrixM8n8X2Op,
+    StmatrixM8n8X2TransOp, StmatrixM8n8X4Op, StmatrixM8n8X4TransOp, Tcgen05AllocCg2Op,
+    Tcgen05AllocOp, Tcgen05CommitCg2Op, Tcgen05CommitMulticastCg2Op, Tcgen05CommitOp,
+    Tcgen05CommitSharedClusterCg2Op, Tcgen05CommitSharedClusterOp, Tcgen05CpSmemToTmemCg2Op,
+    Tcgen05CpSmemToTmemOp, Tcgen05DeallocCg2Op, Tcgen05DeallocOp, Tcgen05FenceAfterThreadSyncOp,
     Tcgen05FenceBeforeThreadSyncOp, Tcgen05Ld16x256bPureOp, Tcgen05Ld16x256bX8PureOp,
-    Tcgen05LoadWaitOp, Tcgen05MmaF16Cg2Op, Tcgen05MmaF16Op, Tcgen05MmaWsBf16Op, Tcgen05MmaWsF16Op,
-    Tcgen05MmaWsTf32Op, Tcgen05RelinquishAllocPermitCg2Op, Tcgen05RelinquishAllocPermitOp,
-    Tcgen05StoreWaitOp,
+    Tcgen05LoadWaitOp, Tcgen05MmaF8Cg2Op, Tcgen05MmaF16Cg2Op, Tcgen05MmaF16Op, Tcgen05MmaWsBf16Op,
+    Tcgen05MmaWsF16Op, Tcgen05MmaWsTf32Op, Tcgen05RelinquishAllocPermitCg2Op,
+    Tcgen05RelinquishAllocPermitOp, Tcgen05St16x256bPureOp, Tcgen05StoreWaitOp,
 };
 // NOTE: Removed imports for deprecated ops (now in cuda-core as builders):
 // Tcgen05MakeSmemDescOp, Tcgen05MakeSmemDescStridedOp, Tcgen05StTmemToSmemOp,
@@ -1487,6 +1487,72 @@ pub fn emit_tcgen05_ld_16x256b_pure(
     )
 }
 
+/// Emit tcgen05_st_16x256b_pure: Pure TMEM store of 4 f32 values.
+///
+/// Register-to-TMEM counterpart of tcgen05_ld_16x256b_pure.
+///
+/// Args: (tmem_addr: u32, v0: f32, v1: f32, v2: f32, v3: f32)
+/// Returns: void
+pub fn emit_tcgen05_st_16x256b_pure(
+    ctx: &mut Context,
+    body: &mir::Body,
+    args: &[mir::Operand],
+    target: &Option<usize>,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    value_map: &mut ValueMap,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+) -> TranslationResult<Ptr<Operation>> {
+    if args.len() != 5 {
+        return input_err!(
+            loc.clone(),
+            TranslationErr::unsupported(format!(
+                "tcgen05_st_16x256b_pure expects 5 arguments (tmem_addr, v0..v3), got {}",
+                args.len()
+            ))
+        );
+    }
+
+    let mut last_op = prev_op;
+    let mut operands = Vec::with_capacity(5);
+
+    for arg in args.iter().take(5) {
+        let (val, last_op_after) =
+            rvalue::translate_operand(ctx, body, arg, value_map, block_ptr, last_op, loc.clone())?;
+        last_op = last_op_after;
+        operands.push(val);
+    }
+
+    let st_op = Operation::new(
+        ctx,
+        Tcgen05St16x256bPureOp::get_concrete_op_info(),
+        vec![],
+        operands,
+        vec![],
+        0,
+    );
+    st_op.deref_mut(ctx).set_loc(loc.clone());
+
+    if let Some(prev) = last_op {
+        st_op.insert_after(ctx, prev);
+    } else {
+        st_op.insert_at_front(block_ptr, ctx);
+    }
+
+    if let Some(target_idx) = target {
+        let goto_op = emit_goto(ctx, *target_idx, st_op, block_map, loc);
+        Ok(goto_op)
+    } else {
+        input_err!(
+            loc.clone(),
+            TranslationErr::unsupported(
+                "tcgen05_st_16x256b_pure call without target block".to_string()
+            )
+        )
+    }
+}
+
 /// Emit stmatrix_m8n8_x2: Warp-cooperative matrix store (NON-trans, x2).
 ///
 /// This stores 2 matrix tiles (16 columns) WITHOUT transpose.
@@ -1806,6 +1872,108 @@ pub fn emit_tcgen05_store_wait(
     }
 }
 
+/// Emit cp_async_commit_group: Wait for tcgen05.st operations to complete.
+///
+/// Args: none
+/// Returns: void
+pub fn emit_cp_async_commit_group(
+    ctx: &mut Context,
+    args: &[mir::Operand],
+    target: &Option<usize>,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+) -> TranslationResult<Ptr<Operation>> {
+    if !args.is_empty() {
+        return input_err!(
+            loc.clone(),
+            TranslationErr::unsupported(format!(
+                "cp_async_commit_group expects 0 arguments, got {}",
+                args.len()
+            ))
+        );
+    }
+
+    let wait_op = Operation::new(
+        ctx,
+        CpAsyncCommitGroupZeroOp::get_concrete_op_info(),
+        vec![],
+        vec![],
+        vec![],
+        0,
+    );
+    wait_op.deref_mut(ctx).set_loc(loc.clone());
+
+    if let Some(prev) = prev_op {
+        wait_op.insert_after(ctx, prev);
+    } else {
+        wait_op.insert_at_front(block_ptr, ctx);
+    }
+
+    if let Some(target_idx) = target {
+        let goto_op = emit_goto(ctx, *target_idx, wait_op, block_map, loc);
+        Ok(goto_op)
+    } else {
+        input_err!(
+            loc.clone(),
+            TranslationErr::unsupported(
+                "cp_async_commit_group call without target block".to_string()
+            )
+        )
+    }
+}
+
+/// Emit cp_async_wait_all: Wait for tcgen05.st operations to complete.
+///
+/// Args: none
+/// Returns: void
+pub fn emit_cp_async_wait_all(
+    ctx: &mut Context,
+    args: &[mir::Operand],
+    target: &Option<usize>,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+) -> TranslationResult<Ptr<Operation>> {
+    if !args.is_empty() {
+        return input_err!(
+            loc.clone(),
+            TranslationErr::unsupported(format!(
+                "cp_async_wait_all expects 0 arguments, got {}",
+                args.len()
+            ))
+        );
+    }
+
+    let wait_op = Operation::new(
+        ctx,
+        CpAsyncWaitAllOp::get_concrete_op_info(),
+        vec![],
+        vec![],
+        vec![],
+        0,
+    );
+    wait_op.deref_mut(ctx).set_loc(loc.clone());
+
+    if let Some(prev) = prev_op {
+        wait_op.insert_after(ctx, prev);
+    } else {
+        wait_op.insert_at_front(block_ptr, ctx);
+    }
+
+    if let Some(target_idx) = target {
+        let goto_op = emit_goto(ctx, *target_idx, wait_op, block_map, loc);
+        Ok(goto_op)
+    } else {
+        input_err!(
+            loc.clone(),
+            TranslationErr::unsupported("cp_async_wait_all call without target block".to_string())
+        )
+    }
+}
+
 // =============================================================================
 // CTA Pair (cta_group::2) Variants
 // =============================================================================
@@ -2107,6 +2275,111 @@ pub fn emit_tcgen05_mma_f16_cg2(
             TranslationErr::unsupported(
                 "tcgen05_mma_f16_cg2 call without target block".to_string()
             )
+        )
+    }
+}
+
+pub fn emit_tcgen05_mma_f8_cg2(
+    ctx: &mut Context,
+    body: &mir::Body,
+    args: &[mir::Operand],
+    target: &Option<usize>,
+    block_ptr: Ptr<BasicBlock>,
+    prev_op: Option<Ptr<Operation>>,
+    value_map: &mut ValueMap,
+    block_map: &[Ptr<BasicBlock>],
+    loc: Location,
+) -> TranslationResult<Ptr<Operation>> {
+    if args.len() != 5 {
+        return input_err!(
+            loc.clone(),
+            TranslationErr::unsupported(format!(
+                "tcgen05_mma_f8_cg2 expects 5 arguments, got {}",
+                args.len()
+            ))
+        );
+    }
+
+    let mut last_op = prev_op;
+
+    let (d_tmem, last_op_after) = rvalue::translate_operand(
+        ctx,
+        body,
+        &args[0],
+        value_map,
+        block_ptr,
+        last_op,
+        loc.clone(),
+    )?;
+    last_op = last_op_after;
+
+    let (a_desc, last_op_after) = rvalue::translate_operand(
+        ctx,
+        body,
+        &args[1],
+        value_map,
+        block_ptr,
+        last_op,
+        loc.clone(),
+    )?;
+    last_op = last_op_after;
+
+    let (b_desc, last_op_after) = rvalue::translate_operand(
+        ctx,
+        body,
+        &args[2],
+        value_map,
+        block_ptr,
+        last_op,
+        loc.clone(),
+    )?;
+    last_op = last_op_after;
+
+    let (idesc, last_op_after) = rvalue::translate_operand(
+        ctx,
+        body,
+        &args[3],
+        value_map,
+        block_ptr,
+        last_op,
+        loc.clone(),
+    )?;
+    last_op = last_op_after;
+
+    let (enable_d, last_op_after) = rvalue::translate_operand(
+        ctx,
+        body,
+        &args[4],
+        value_map,
+        block_ptr,
+        last_op,
+        loc.clone(),
+    )?;
+    last_op = last_op_after;
+
+    let mma_op = Operation::new(
+        ctx,
+        Tcgen05MmaF8Cg2Op::get_concrete_op_info(),
+        vec![],
+        vec![d_tmem, a_desc, b_desc, idesc, enable_d],
+        vec![],
+        0,
+    );
+    mma_op.deref_mut(ctx).set_loc(loc.clone());
+
+    if let Some(prev) = last_op {
+        mma_op.insert_after(ctx, prev);
+    } else {
+        mma_op.insert_at_front(block_ptr, ctx);
+    }
+
+    if let Some(target_idx) = target {
+        let goto_op = emit_goto(ctx, *target_idx, mma_op, block_map, loc);
+        Ok(goto_op)
+    } else {
+        input_err!(
+            loc.clone(),
+            TranslationErr::unsupported("tcgen05_mma_f8_cg2 call without target block".to_string())
         )
     }
 }

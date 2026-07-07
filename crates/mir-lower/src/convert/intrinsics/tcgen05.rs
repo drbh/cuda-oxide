@@ -504,6 +504,37 @@ pub(crate) fn convert_ld_16x256b_pure(
     Ok(())
 }
 
+/// Convert nvvm.tcgen05_st_16x256b_pure to inline PTX.
+///
+/// Register-to-TMEM counterpart of the 16x256b load: each thread contributes
+/// 4 b32 values. Callers must follow the store with `tcgen05.wait::st` before
+/// any operation that reads the stored TMEM region.
+///
+/// PTX: tcgen05.st.sync.aligned.16x256b.x1.b32 [tmem_addr], {r0, r1, r2, r3};
+pub(crate) fn convert_st_16x256b_pure(
+    ctx: &mut Context,
+    rewriter: &mut DialectConversionRewriter,
+    op: Ptr<Operation>,
+    _operands_info: &OperandsInfo,
+) -> Result<()> {
+    let operands: Vec<_> = op.deref(ctx).operands().collect();
+    if operands.len() < 5 {
+        return pliron::input_err_noloc!("tcgen05_st_16x256b_pure requires 5 operands");
+    }
+
+    let void_ty = llvm_types::VoidType::get(ctx);
+    inline_asm_convergent(
+        ctx,
+        rewriter,
+        void_ty.into(),
+        operands,
+        "tcgen05.st.sync.aligned.16x256b.x1.b32 [$0], {$1,$2,$3,$4};",
+        "r,f,f,f,f,~{memory}",
+    );
+    rewriter.erase_operation(ctx, op);
+    Ok(())
+}
+
 // ============================================================================
 // Conversion and synchronization operations
 // ============================================================================
@@ -586,6 +617,52 @@ pub(crate) fn convert_store_wait(
         void_ty.into(),
         vec![],
         "tcgen05.wait::st.sync.aligned;",
+        "~{memory}",
+    );
+    rewriter.erase_operation(ctx, op);
+    Ok(())
+}
+
+/// Convert nvvm.cp_async_commit_group to inline PTX.
+///
+/// Thread-level cp.async completion control.
+/// PTX: cp.async.commit_group;
+pub(crate) fn convert_cp_async_commit_group(
+    ctx: &mut Context,
+    rewriter: &mut DialectConversionRewriter,
+    op: Ptr<Operation>,
+    _operands_info: &OperandsInfo,
+) -> Result<()> {
+    let void_ty = llvm_types::VoidType::get(ctx);
+    inline_asm_convergent(
+        ctx,
+        rewriter,
+        void_ty.into(),
+        vec![],
+        "cp.async.commit_group;",
+        "~{memory}",
+    );
+    rewriter.erase_operation(ctx, op);
+    Ok(())
+}
+
+/// Convert nvvm.cp_async_wait_all to inline PTX.
+///
+/// Thread-level cp.async completion control.
+/// PTX: cp.async.wait_all;
+pub(crate) fn convert_cp_async_wait_all(
+    ctx: &mut Context,
+    rewriter: &mut DialectConversionRewriter,
+    op: Ptr<Operation>,
+    _operands_info: &OperandsInfo,
+) -> Result<()> {
+    let void_ty = llvm_types::VoidType::get(ctx);
+    inline_asm_convergent(
+        ctx,
+        rewriter,
+        void_ty.into(),
+        vec![],
+        "cp.async.wait_all;",
         "~{memory}",
     );
     rewriter.erase_operation(ctx, op);
@@ -708,6 +785,49 @@ pub(crate) fn convert_mma_f16_cg2(
         ".reg .u32 %z; ",
         "mov.u32 %z, 0; ",
         "tcgen05.mma.cta_group::2.kind::f16 [$0], $1, $2, $3, {%z, %z, %z, %z, %z, %z, %z, %z}, %enable_pred; ",
+        "}"
+    );
+
+    let void_ty = llvm_types::VoidType::get(ctx);
+    let inline_asm = llvm::InlineAsmOp::build(
+        ctx,
+        void_ty.into(),
+        vec![d_tmem, a_desc, b_desc, idesc, enable_d],
+        asm_template,
+        "r,l,l,r,r,~{memory}",
+        AsmKind::Convergent,
+    );
+    rewriter.insert_operation(ctx, inline_asm.get_operation());
+    rewriter.erase_operation(ctx, op);
+
+    Ok(())
+}
+
+/// because the CTA pair spans twice as many TMEM lanes.
+pub(crate) fn convert_mma_f8_cg2(
+    ctx: &mut Context,
+    rewriter: &mut DialectConversionRewriter,
+    op: Ptr<Operation>,
+    _operands_info: &OperandsInfo,
+) -> Result<()> {
+    let operands: Vec<_> = op.deref(ctx).operands().collect();
+    if operands.len() < 5 {
+        return pliron::input_err_noloc!("tcgen05_mma_f8_cg2 requires 5 operands");
+    }
+
+    let d_tmem = operands[0];
+    let a_desc = operands[1];
+    let b_desc = operands[2];
+    let idesc = operands[3];
+    let enable_d = operands[4];
+
+    let asm_template = concat!(
+        "{ ",
+        ".reg .pred %enable_pred; ",
+        "setp.ne.s32 %enable_pred, $4, 0; ",
+        ".reg .u32 %z; ",
+        "mov.u32 %z, 0; ",
+        "tcgen05.mma.cta_group::2.kind::f8f6f4 [$0], $1, $2, $3, {%z, %z, %z, %z, %z, %z, %z, %z}, %enable_pred; ",
         "}"
     );
 
